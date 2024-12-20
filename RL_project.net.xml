@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2024-12-20 13:19:41 by Eclipse SUMO netedit Version 1.21.0
+<!-- generated on 2024-12-20 18:24:09 by Eclipse SUMO netedit Version 1.21.0
 <neteditConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/neteditConfiguration.xsd">
 
     <input>
@@ -68,10 +68,9 @@
     </edge>
 
     <tlLogic id="ramp_metering_tl" type="static" programID="0" offset="0">
-        <phase duration="42" state="GrGG"/>
-        <phase duration="3"  state="yrGG"/>
-        <phase duration="42" state="rGGG"/>
-        <phase duration="3"  state="ryyy"/>
+        <phase duration="42" state="GGGG"/>
+        <phase duration="3"  state="GGGy"/>
+        <phase duration="45" state="GGGr"/>
     </tlLogic>
 
     <junction id="junction_end" type="dead_end" x="76.17" y="10.64" incLanes="highway_exit_0 highway_exit_1 highway_exit_2" intLanes="" shape="76.17,1.04 76.17,10.64"/>
