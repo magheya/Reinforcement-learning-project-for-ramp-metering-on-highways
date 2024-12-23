@@ -67,7 +67,7 @@
         <lane id="ramp_entry_0" index="0" speed="13.89" length="200.00" shape="-76.52,-34.67 3.11,-1.96"/>
     </edge>
 
-    <tlLogic id="ramp_metering_tl" type="static" programID="0" offset="0">
+    <tlLogic id="ramp_metering_tl" type="actuated" programID="0" offset="0">
         <phase duration="1" state="GGGG"/>
         <phase duration="1"  state="GGGy"/>
         <phase duration="1" state="GGGr"/>
