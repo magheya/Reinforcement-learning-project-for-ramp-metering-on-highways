@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2024-12-20 18:24:09 by Eclipse SUMO netedit Version 1.21.0
+<!-- generated on 2024-12-22 00:37:15 by Eclipse SUMO netedit Version 1.21.0
 -->
 
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
@@ -8,8 +8,8 @@
     <vType id="car" length="5.00" maxSpeed="33.33" color="red" laneChangeModel="LC2013" lcStrategic="1.0" lcSpeedGain="1.0" lcKeepRight="0.2" accel="2.6" decel="4.5" sigma="0.5"/>
     <vType id="truck" length="12.00" maxSpeed="25.00" color="blue" laneChangeModel="LC2013" lcStrategic="1.0" lcSpeedGain="0.8" lcKeepRight="0.4" accel="1.0" decel="3.0" sigma="0.5"/>
     <!-- Vehicles, persons and containers (sorted by depart) -->
-    <flow id="car_highway_flow" type="car" begin="0.00" departPos="free" departSpeed="max" from="highway_entry" to="highway_exit" end="3600.00" number="1800"/>
-    <flow id="car_ramp_flow" type="car" begin="0.00" departPos="free" departSpeed="max" from="ramp_entry" to="highway_exit" end="3600.00" number="400"/>
+    <flow id="car_highway_flow" type="car" begin="0.00" departPos="free" departSpeed="max" from="highway_entry" to="highway_exit" end="3600.00" number="5000"/>
+    <flow id="car_ramp_flow" type="car" begin="0.00" departPos="free" departSpeed="max" from="ramp_entry" to="highway_exit" end="3600.00" number="1000"/>
     <flow id="truck_highway_flow" type="truck" begin="0.00" departPos="free" departSpeed="max" from="highway_entry" to="highway_exit" end="3600.00" number="300"/>
     <flow id="truck_ramp_flow" type="truck" begin="0.00" departPos="free" departSpeed="max" from="ramp_entry" to="highway_exit" end="3600.00" number="100"/>
 </routes>

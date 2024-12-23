@@ -1,139 +1,190 @@
+import os
 import traci
-import numpy as np
 import random
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.layers import Input
+import numpy as np
+import tensorflow as tf
+from collections import deque
+import matplotlib.pyplot as plt
 
+# Define SUMO environment
+class SumoRampEnv:
+    def __init__(self):
+        self.sumoCmd = ["sumo", "-c", "E:/ESTIN/RLOC_Project/RL_project.sumocfg"]
+        traci.start(self.sumoCmd)
+        self.actions = [0, 1, 2]  # Green, Yellow, Red
+        self.state_size = 6  # Example: [highway_density, ramp_density, avg_speed, queue_length]
+        self.action_size = len(self.actions)
+    
+    def reset(self):
+        traci.load(self.sumoCmd)
+        return self.get_state()
+    
+    def step(self, action):
+        if action == 0:
+            traci.trafficlight.setPhase("ramp_metering_tl", 0)  # Green
+        elif action == 1:
+            traci.trafficlight.setPhase("ramp_metering_tl", 1)  # Yellow
+        else:
+            traci.trafficlight.setPhase("ramp_metering_tl", 2)  # Red
+        
+        traci.simulationStep()
+        next_state = self.get_state()
+        reward = self.calculate_reward()
+        done = traci.simulation.getMinExpectedNumber() <= 0
+        return next_state, reward, done
+    
+    def get_state(self):
+        highway_density = traci.edge.getLastStepVehicleNumber("highway_entry") / 3
+        ramp_density = traci.edge.getLastStepVehicleNumber("ramp_entry")
+        avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
+        queue_length = traci.edge.getLastStepHaltingNumber("ramp_entry")
+        traffic_light_phase = traci.trafficlight.getPhase("ramp_metering_tl")
+        phase_duration = traci.trafficlight.getPhaseDuration("ramp_metering_tl")
+        
+        return np.array([
+            highway_density, ramp_density, avg_speed, queue_length,
+            traffic_light_phase, phase_duration
+        ])
 
-# RL Agent for traffic light control
-class RLAgent:
+    def calculate_reward(self):
+        highway_congestion = traci.edge.getLastStepHaltingNumber("highway_entry")
+        ramp_queue = traci.edge.getLastStepHaltingNumber("ramp_entry")
+        avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
+        
+        # Adjustable weights
+        alpha = 0.5  # Weight for ramp queue
+        beta = 0.5   # Weight for highway congestion
+        gamma = 1.0  # Weight for average speed
+        
+        reward = -(alpha * ramp_queue) - (beta * highway_congestion) + (gamma * avg_speed)
+        
+        # Penalize abrupt phase switches (optional)
+        phase_switch_penalty = -0.1 if traci.trafficlight.getPhase("ramp_metering_tl") == 1 else 0.0
+        
+        return reward + phase_switch_penalty
+
+    def close(self):
+        traci.close()
+
+# Define DQN Agent
+class DQNAgent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = []  # Replay memory
-        self.gamma = 0.95  # Discount factor
-        self.epsilon = 1.0  # Exploration rate
-        self.epsilon_min = 0.1
+        self.memory = deque(maxlen=2000)
+        self.gamma = 0.95
+        self.epsilon = 1.0
         self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01
         self.learning_rate = 0.001
         self.model = self.build_model()
-
+        self.target_model = self.build_model()
+        self.update_target_model()
+    
     def build_model(self):
-        model = Sequential()
-        model.add(Input(shape=(self.state_size,)))  # Using Input layer to specify input shape
-        model.add(Dense(24, activation="relu"))
-        model.add(Dense(24, activation="relu"))
-        model.add(Dense(self.action_size, activation="linear"))
-        model.compile(optimizer="adam", loss="mse")
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(64, activation='relu', input_dim=self.state_size),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(self.action_size, activation='linear')
+        ])
+        model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
         return model
-
-
-    def act(self, state):
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)  # Random action
-        state = np.reshape(state, [1, self.state_size])
-        act_values = self.model.predict(state)
-        return np.argmax(act_values)  # Best action
+    
+    def update_target_model(self):
+        self.target_model.set_weights(self.model.get_weights())
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
-
+    
+    def act(self, state):
+        if np.random.rand() <= self.epsilon:
+            return random.randrange(self.action_size)
+        return np.argmax(self.model.predict(state[np.newaxis, :]))
+    
     def replay(self, batch_size):
-        minibatch = random.sample(self.memory, min(len(self.memory), batch_size))
+        minibatch = random.sample(self.memory, batch_size)
         for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target += self.gamma * np.amax(self.model.predict(next_state)[0])
-            target_f = self.model.predict(state)
+            target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :]))
+            target_f = self.model.predict(state[np.newaxis, :])
             target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0)
+            self.model.fit(state[np.newaxis, :], target_f, epochs=1, verbose=0)
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+        
+        # Update target network periodically
+        if random.random() < 0.1:
+            self.update_target_model()
 
-# Retrieve state information
-def get_state():
-    return [
-        len(traci.edge.getLastStepVehicleIDs("ramp_entry")),  # Queue length on ramp
-        len(traci.edge.getLastStepVehicleIDs("highway_entry")),  # Queue length on highway
-        traci.edge.getLastStepOccupancy("ramp_entry"),  # Vehicle density on ramp
-        traci.edge.getLastStepOccupancy("highway_entry"),  # Vehicle density on highway
-        traci.edge.getLastStepMeanSpeed("highway_entry"),  # Average speed on highway
-    ]
-
-# Main simulation logic
-def main():
-    sumoConfigFile = "RL_project.sumocfg"
-    sumoBinary = "sumo-gui"  # Use "sumo" for command-line mode
-    sumoCmd = [sumoBinary, "-c", sumoConfigFile]
-
-    # Initialize RL Agent
-    state_size = 5  # Length of the state vector
-    action_size = 3  # Three actions: Green, Yellow, and Red phases for the ramp
-    agent = RLAgent(state_size, action_size)
+# Train DQN Agent
+if __name__ == "__main__":
+    env = SumoRampEnv()
+    agent = DQNAgent(env.state_size, env.action_size)
+    episodes = 100
     batch_size = 32
 
-    # Start SUMO only once before training loop
-    traci.start(sumoCmd)  # Start SUMO simulation connection
-    traci.simulationStep()  # Take an initial step to start the simulation
-
-    # Train over multiple episodes
-    num_episodes = 100  # Number of episodes to run
-    for episode in range(num_episodes):  # Train for 100 episodes
-        # Reset the simulation manually for the new episode
-        traci.load([sumoConfigFile])  # Reload SUMO configuration
-        traci.simulationStep()  # Advance one step to start the simulation
-
-        # Reset all vehicles
-        for vehicle_id in traci.vehicle.getIDList():
-            traci.vehicle.remove(vehicle_id)
-
-        # Reset traffic light state to initial (Green for ramp)
-        traci.trafficlight.setPhase("ramp_metering_tl", 0)  # Green for ramp (Phase 0)
-        
-        state = get_state()  # Get initial state
-        state = np.reshape(state, [1, state_size])
-
-        total_reward = 0  # Keep track of the total reward for the episode
-        for step in range(3600):  # Simulate for 3600 seconds per episode
-            action = agent.act(state)  # Choose an action (Green=0, Yellow=1, Red=2)
-
-            # Set traffic light phase based on the action
-            if action == 0:
-                traci.trafficlight.setPhase("ramp_metering_tl", 0)  # Green for ramp
-            elif action == 1:
-                traci.trafficlight.setPhase("ramp_metering_tl", 1)  # Yellow for ramp
-            elif action == 2:
-                traci.trafficlight.setPhase("ramp_metering_tl", 2)  # Red for ramp
-
-            traci.simulationStep()  # Advance simulation
-
-            # Get next state and calculate reward
-            next_state = get_state()  # Get next state
-            next_state = np.reshape(next_state, [1, state_size])
-            reward = (
-                -len(traci.edge.getLastStepVehicleIDs("ramp_entry"))  # Penalize ramp queue length
-                + traci.edge.getLastStepMeanSpeed("highway_entry")  # Reward highway speed
-            )
-            done = step == 3599  # Check if episode ends
-            agent.remember(state, action, reward, next_state, done)  # Store experience in memory
-            state = next_state  # Move to the next state
-
-            total_reward += reward  # Add reward to the total for this episode
-
-            if done:
-                print(f"Episode {episode+1}/{num_episodes}: Reward = {total_reward}")
-                break  # End the current episode
-
-        if len(agent.memory) > batch_size:
-            agent.replay(batch_size)  # Train the model with replay memory
-
-    # Save the trained model after all episodes
-    agent.model.save("traffic_light_model.h5")
-    print("Training complete. Model saved as traffic_light_model.h5")
+    # Metrics for evaluation
+    rewards_per_episode = []  # Track total reward per episode
+    avg_speed_per_episode = []  # Average speed per episode
+    queue_length_per_episode = []  # Queue length per episode
     
-    # Close the simulation connection after training
-    traci.close()
+    for e in range(episodes):
+        state = env.reset()
+        done = False
+        total_reward = 0
+        
+        while not done:
+            action = agent.act(state)
+            next_state, reward, done = env.step(action)
+            agent.remember(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
+        
+        # Store episode reward for plotting
+        rewards_per_episode.append(total_reward)
+        avg_speed_per_episode.append(traci.edge.getLastStepMeanSpeed("highway_entry"))
+        queue_length_per_episode.append(traci.edge.getLastStepHaltingNumber("ramp_entry"))
+        
+        if len(agent.memory) > batch_size:
+            agent.replay(batch_size)
+        
+        print(f"Episode: {e+1}/{episodes}, Reward: {total_reward}")
 
-if __name__ == "__main__":
-    main()
+        # Save model every 10 episodes
+        if (e + 1) % 10 == 0:
+            agent.model.save(f"dqn_model_episode_{e+1}.h5")
+            print(f"Model saved at episode {e+1}")
+        
+    # Plot metrics
+    # Plot Total Reward Across Episodes
+    plt.figure(figsize=(12, 6))
+    plt.plot(rewards_per_episode, label='Total Reward', color='b')
+    plt.title('Total Reward Across Episodes')
+    plt.xlabel('Episodes')
+    plt.ylabel('Total Reward')
+    plt.legend()
+    plt.show()
+
+    # Plot Average Speed Across Episodes
+    plt.figure(figsize=(12, 6))
+    plt.plot(avg_speed_per_episode, label='Average Speed', color='g')
+    plt.title('Average Vehicle Speed Across Episodes')
+    plt.xlabel('Episodes')
+    plt.ylabel('Average Speed (m/s)')
+    plt.legend()
+    plt.show()
+
+    # Plot Queue Length Across Episodes
+    plt.figure(figsize=(12, 6))
+    plt.plot(queue_length_per_episode, label='Queue Length', color='r')
+    plt.title('Average Queue Length Across Episodes')
+    plt.xlabel('Episodes')
+    plt.ylabel('Number of Halted Vehicles')
+    plt.legend()
+    plt.show()
+    
+    env.close()
+
+    # Save final model after training
+    agent.model.save("dqn_model_final.h5")
+    print("Final model saved as dqn_model_final.h5")

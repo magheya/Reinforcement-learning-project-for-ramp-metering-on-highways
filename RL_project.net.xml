@@ -54,23 +54,23 @@
     </edge>
 
     <edge id="highway_entry" from="junction_start" to="junction_merge" priority="1" shape="-76.81,10.64 3.62,10.64">
-        <lane id="highway_entry_0" index="0" speed="13.89" length="79.01" shape="-76.81,2.64 2.20,2.64"/>
-        <lane id="highway_entry_1" index="1" speed="13.89" length="79.01" shape="-76.81,5.84 2.20,5.84"/>
-        <lane id="highway_entry_2" index="2" speed="13.89" length="79.01" shape="-76.81,9.04 2.20,9.04"/>
+        <lane id="highway_entry_0" index="0" speed="13.89" length="500.00" shape="-76.81,2.64 2.20,2.64"/>
+        <lane id="highway_entry_1" index="1" speed="13.89" length="500.00" shape="-76.81,5.84 2.20,5.84"/>
+        <lane id="highway_entry_2" index="2" speed="13.89" length="500.00" shape="-76.81,9.04 2.20,9.04"/>
     </edge>
     <edge id="highway_exit" from="junction_merge" to="junction_end" priority="1" shape="3.62,10.64 76.17,10.64">
-        <lane id="highway_exit_0" index="0" speed="13.89" length="57.55" shape="18.62,2.64 76.17,2.64"/>
-        <lane id="highway_exit_1" index="1" speed="13.89" length="57.55" shape="18.62,5.84 76.17,5.84"/>
-        <lane id="highway_exit_2" index="2" speed="13.89" length="57.55" shape="18.62,9.04 76.17,9.04"/>
+        <lane id="highway_exit_0" index="0" speed="13.89" length="500.00" shape="18.62,2.64 76.17,2.64"/>
+        <lane id="highway_exit_1" index="1" speed="13.89" length="500.00" shape="18.62,5.84 76.17,5.84"/>
+        <lane id="highway_exit_2" index="2" speed="13.89" length="500.00" shape="18.62,9.04 76.17,9.04"/>
     </edge>
     <edge id="ramp_entry" from="junction_ramp_start" to="junction_merge" priority="1" shape="-77.13,-33.19 3.40,-0.11">
-        <lane id="ramp_entry_0" index="0" speed="13.89" length="86.09" shape="-76.52,-34.67 3.11,-1.96"/>
+        <lane id="ramp_entry_0" index="0" speed="13.89" length="200.00" shape="-76.52,-34.67 3.11,-1.96"/>
     </edge>
 
     <tlLogic id="ramp_metering_tl" type="static" programID="0" offset="0">
-        <phase duration="42" state="GGGG"/>
-        <phase duration="3"  state="GGGy"/>
-        <phase duration="45" state="GGGr"/>
+        <phase duration="1" state="GGGG"/>
+        <phase duration="1"  state="GGGy"/>
+        <phase duration="1" state="GGGr"/>
     </tlLogic>
 
     <junction id="junction_end" type="dead_end" x="76.17" y="10.64" incLanes="highway_exit_0 highway_exit_1 highway_exit_2" intLanes="" shape="76.17,1.04 76.17,10.64"/>
