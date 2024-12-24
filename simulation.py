@@ -68,31 +68,27 @@ class SumoRampEnv:
         ramp_queue = traci.edge.getLastStepHaltingNumber("ramp_entry")
         avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
 
-        # Adjusted weights for the reward components
-        alpha = 0.5   # Weight for highway throughput, less importance than queue length in real-world congestion
-        beta = -5.0   # Strong penalty for ramp queue to avoid congestion
-        gamma = 1.2   # Reward for average speed, moderately high to promote smooth traffic flow
+        highway_throughput = min(highway_throughput / 100, 1)  # Cap à 100 véhicules
+        ramp_queue = min(ramp_queue / 50, 1)  # Cap à 50 véhicules
+        avg_speed = avg_speed / 15  # Normalisé à une vitesse maximale de 15 m/s
+
+
+        # Pondération ajustée
+        alpha = 0.4
+        beta = -0.6
+        gamma = 0.8
         
         # Calculate the reward components
         reward = (alpha * highway_throughput) + (beta * ramp_queue) + (gamma * avg_speed)
-        
-        # Apply phase switch penalty to avoid unnecessary switching (penalize too many yellow phases)
-        phase_switch_penalty = -0.1 if traci.trafficlight.getPhase("ramp_metering_tl") == 1 else 0.0
-        reward += phase_switch_penalty
-        
-        # Apply a slight reward for keeping the traffic light phase stable (avoid excessive switching)
-        phase_stability_reward = 0.05 if traci.trafficlight.getPhaseDuration("ramp_metering_tl") > 5 else 0.0
-        reward += phase_stability_reward
 
-        #add emergency_braking_penalty
-        emergency_braking_penalty = 0.0 #still didnt test it
-        if traci.simulation.getCollidingVehiclesNumber() > 0:
-            emergency_braking_penalty = -10.0
-        reward += emergency_braking_penalty
+        if traci.trafficlight.getPhaseDuration("ramp_metering_tl") > 5:
+            reward += 0.05  # Phase stable
         
-        # Penalize for extremely low average speeds (traffic jam)
-        if avg_speed < 2.0:  # 2 m/s = 7.2 km/h (slow traffic)
-            reward -= 5.0  # Penalize heavily for congested traffic
+        if traci.simulation.getCollidingVehiclesNumber() > 0:
+            reward -= 10.0  # Collision détectée
+        
+        if avg_speed < 2.0:
+            reward -= 5.0  # Embouteillage
 
         return reward
 
@@ -115,6 +111,7 @@ class DQNAgent:
         self.model = self.build_model()
         self.target_model = self.build_model()
         self.update_target_model()
+        self.target_update_freq = 10  # Mise à jour du réseau cible tous les 10 épisodes
         self.exploration_strategy = "linear_decay"  # Can also set to "periodic_reset"
         self.reset_period = 50  # For periodic exploration reset
         self.episode_count = 0
@@ -155,13 +152,11 @@ class DQNAgent:
             self.model.fit(state[np.newaxis, :], target_f, epochs=1, verbose=0)
 
     def update_exploration(self):
-        """Update epsilon dynamically based on the exploration strategy."""
         self.episode_count += 1
         if self.exploration_strategy == "linear_decay":
             self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
         elif self.exploration_strategy == "periodic_reset" and self.episode_count % self.reset_period == 0:
-            self.epsilon = 1.0  # Reset to full exploration
-        self.epsilon = max(self.epsilon, self.epsilon_min)  # Ensure epsilon doesn't drop below minimum
+            self.epsilon = 0.5  # Redémarrage partiel de l'exploration
 
 # Training Loop
 if __name__ == "__main__":
@@ -194,8 +189,8 @@ if __name__ == "__main__":
         queue_length_per_episode.append(traci.edge.getLastStepHaltingNumber("ramp_entry"))
         
         agent.replay(batch_size)
-        agent.update_target_model()
-         # Update exploration dynamically
+        if e % agent.target_update_freq == 0:
+            agent.update_target_model()
         agent.update_exploration()
 
         print(f"Episode: {e+1}, Reward: {total_reward:.2f}, Avg Speed: {np.mean(avg_speed_per_episode):.2f}, "
