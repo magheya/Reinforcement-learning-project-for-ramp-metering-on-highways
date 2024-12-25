@@ -5,6 +5,8 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import matplotlib.pyplot as plt
+import csv
+from multiprocessing import Pool, Manager
 
 
 # Define SUMO environment
@@ -54,7 +56,7 @@ class SumoRampEnv:
             traffic_light_phase = traci.trafficlight.getPhase("ramp_metering_tl")
             phase_duration = traci.trafficlight.getPhaseDuration("ramp_metering_tl")
             
-            return np.array([
+            return np.array([ 
                 highway_density, ramp_density, avg_speed, queue_length,
                 traffic_light_phase, phase_duration
             ])
@@ -74,9 +76,9 @@ class SumoRampEnv:
 
 
         # Pondération ajustée
-        alpha = 0.4
-        beta = -0.6
-        gamma = 0.8
+        alpha = 0.5
+        beta = -1
+        gamma = 1
         
         # Calculate the reward components
         reward = (alpha * highway_throughput) + (beta * ramp_queue) + (gamma * avg_speed)
@@ -111,10 +113,6 @@ class DQNAgent:
         self.target_model = self.build_model()
         self.update_target_model()
         self.target_update_freq = 10  # Target model update frequency
-        self.temperature = 1.0  # Starting temperature
-        self.temperature_decay = 0.995  # Temperature decay per episode
-        self.min_temperature = 0.1  # Minimum temperature
-        
         self.episode_count = 0
 
     def build_model(self):
@@ -135,9 +133,9 @@ class DQNAgent:
         self.memory.append((state, action, reward, next_state, done))
 
     def act(self, state):
-        # Softmax policy for action selection
+        # Softmax policy without temperature scaling
         q_values = self.model.predict(state[np.newaxis, :], verbose=0)[0]
-        exp_q_values = np.exp(q_values / self.temperature)  # Apply temperature scaling
+        exp_q_values = np.exp(q_values)  # Apply softmax without temperature
         probabilities = exp_q_values / np.sum(exp_q_values)  # Normalize to get a probability distribution
         
         # Sample an action based on the probabilities
@@ -157,20 +155,25 @@ class DQNAgent:
 
     def update_exploration(self):
         self.episode_count += 1
-        # Decay the temperature over episodes
-        self.temperature = max(self.temperature * self.temperature_decay, self.min_temperature)
+        # Decay epsilon for exploration vs exploitation (optional)
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+
+with open('traffic_metrics.csv', mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['Episode', 'Average Reward', 'Average Speed (m/s)', 'Queue Length', 'Congestion Rate'])
 
 # Training Loop
 if __name__ == "__main__":
     env = SumoRampEnv()
     agent = DQNAgent(env.state_size, env.action_size)
-    episodes = 100
+    episodes = 1000
     batch_size = 32
-    max_steps_per_episode = 10
+    max_steps_per_episode = 1000
 
     rewards_per_episode = []  # Track total reward per episode
     avg_speed_per_episode = []  # Average speed per episode
     queue_length_per_episode = []  # Queue length per episode
+    congestion_rate_per_episode = []  # Congestion rate per episode
 
     for e in range(episodes):
         state = env.reset()
@@ -187,18 +190,28 @@ if __name__ == "__main__":
             step_count += 1
 
         rewards_per_episode.append(total_reward)
-        avg_speed_per_episode.append(traci.edge.getLastStepMeanSpeed("highway_entry"))
-        queue_length_per_episode.append(traci.edge.getLastStepHaltingNumber("ramp_entry"))
-        
+        avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
+        avg_speed_per_episode.append(avg_speed)
+        queue_length = traci.edge.getLastStepHaltingNumber("ramp_entry")
+        queue_length_per_episode.append(queue_length)
+        # Calculate Congestion Rate
+        max_queue_length = 50  # Assuming max queue length is 50 vehicles
+        congestion_rate = queue_length / max_queue_length
+        congestion_rate_per_episode.append(congestion_rate)
+
         agent.replay(batch_size)
         if e % agent.target_update_freq == 0:
             agent.update_target_model()
         agent.update_exploration()
 
         print(f"Episode: {e+1}, Reward: {total_reward:.2f}, Avg Speed: {np.mean(avg_speed_per_episode):.2f}, "
-        f"Queue: {np.mean(queue_length_per_episode):.2f}, Epsilon: {agent.epsilon:.2f}, Temperature: {agent.temperature:.2f}") 
-    
-     # Plot metrics
+              f"Queue: {np.mean(queue_length_per_episode):.2f}, Congestion Rate: {np.mean(congestion_rate_per_episode):.2f}, Epsilon: {agent.epsilon:.2f}")
+
+        #Save metrics to CSV after each episode
+        with open('traffic_metrics.csv', mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([e+1, total_reward, avg_speed, queue_length, congestion_rate])
+
     # Plot Total Reward Across Episodes
     plt.figure(figsize=(12, 6))
     plt.plot(rewards_per_episode, label='Total Reward', color='b')
@@ -225,6 +238,15 @@ if __name__ == "__main__":
     plt.ylabel('Number of Halted Vehicles')
     plt.legend()
     plt.show()
-    
+
+    # Plot Congestion Rate Across Episodes
+    plt.figure(figsize=(12, 6))
+    plt.plot(congestion_rate_per_episode, label='Congestion Rate', color='purple')
+    plt.title('Congestion Rate Across Episodes')
+    plt.xlabel('Episodes')
+    plt.ylabel('Congestion Rate')
+    plt.legend()
+    plt.show()
+
     agent.model.save("dqn_model.h5")
     env.close()
