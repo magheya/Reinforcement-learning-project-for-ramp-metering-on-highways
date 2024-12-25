@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import matplotlib.pyplot as plt
+import torch
 from torchrl.data import ListStorage, PrioritizedReplayBuffer
 
 # Define SUMO environment
@@ -136,9 +137,17 @@ class DQNAgent:
         max_q_value_next = np.amax(q_values_next)
         td_error = abs(reward + (self.gamma * max_q_value_next) - np.amax(self.model.predict(state[np.newaxis, :], verbose=0)))
 
+        # Convert to PyTorch tensors
+        state_tensor = torch.tensor(state, dtype=torch.float32)
+        next_state_tensor = torch.tensor(next_state, dtype=torch.float32)
+        action_tensor = torch.tensor(action, dtype=torch.int64)
+        reward_tensor = torch.tensor(reward, dtype=torch.float32)
+        done_tensor = torch.tensor(done, dtype=torch.bool)
+
         # Add the sample to the buffer
-        index = self.memory.add((state, action, reward, next_state, done))  # Add experience and get its index
+        index = self.memory.add((state_tensor, action_tensor, reward_tensor, next_state_tensor, done_tensor))  # Add experience and get its index
         self.memory.update_priority([index], [td_error])  # Update priority for the added experience
+
     
     # def act(self, state):
     #     # Epsilon-Greedy Strategy
@@ -159,26 +168,33 @@ class DQNAgent:
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
             return
-        
+
         # Sample minibatch with importance sampling weights
         minibatch, indices, weights = self.memory.sample(batch_size)
-        
+
         for i, (state, action, reward, next_state, done) in enumerate(minibatch):
+            # Convert tensors back to NumPy arrays for use with TensorFlow model
+            state = state.numpy()
+            next_state = next_state.numpy()
+            action = action.item()
+            reward = reward.item()
+            done = done.item()
+
             # Calculate target Q-value
             target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :], verbose=0))
-            
+
             # Predict current Q-values for the state and update the target for the action taken
             target_f = self.model.predict(state[np.newaxis, :], verbose=0)
             target_f[0][action] = target
-            
+
             # Fit the model using the sample weight
             self.model.fit(state[np.newaxis, :], target_f, sample_weight=np.array([weights[i]]), epochs=1, verbose=0)
-            
+
             # Calculate updated priority using absolute TD error
             updated_priority = abs(target - np.amax(target_f))
-            
+
             # Update the priority of the sampled experience in the buffer
-            self.memory.update(indices[i], updated_priority)
+            self.memory.update_priority([indices[i]], [updated_priority])
 
     def update_exploration(self, avg_reward=None):
         self.episode_count += 1
