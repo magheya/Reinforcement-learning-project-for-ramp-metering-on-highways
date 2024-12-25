@@ -5,14 +5,15 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import matplotlib.pyplot as plt
-
+import csv
+from multiprocessing import Pool, Manager
 
 # Define SUMO environment
 class SumoRampEnv:
     def __init__(self):
         self.sumoCmd = [
             "sumo",
-            "-c", "E:/ESTIN/RLOC_Project/RL_project.sumocfg"
+            "-c", "RL_project.sumocfg"
         ]
         self.actions = [0, 1, 2]  # Green, Yellow, Red
         self.state_size = 6  # State dimensions
@@ -158,71 +159,69 @@ class DQNAgent:
         elif self.exploration_strategy == "periodic_reset" and self.episode_count % self.reset_period == 0:
             self.epsilon = 0.5  # Redémarrage partiel de l'exploration
 
-# Training Loop
-if __name__ == "__main__":
+def run_episode(env, agent, max_steps_per_episode, batch_size):
+    state = env.reset()
+    total_reward = 0
+    done = False
+    step_count = 0 
+
+    while not done and step_count < max_steps_per_episode:
+        action = agent.act(state)
+        next_state, reward, done = env.step(action)
+        agent.remember(state, action, reward, next_state, done)
+        state = next_state
+        total_reward += reward
+        step_count += 1
+
+    agent.replay(batch_size)
+    if agent.episode_count % agent.target_update_freq == 0:
+        agent.update_target_model()
+    agent.update_exploration()
+
+    return total_reward
+
+def run_simulation(run, episodes, max_steps_per_episode, batch_size, rewards_per_episode, lock, csv_file):
     env = SumoRampEnv()
     agent = DQNAgent(env.state_size, env.action_size)
-    episodes = 1000
+    with open(csv_file, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        for e in range(episodes):
+            total_reward = run_episode(env, agent, max_steps_per_episode, batch_size)
+            with lock:
+                rewards_per_episode[e] += total_reward
+            avg_reward = rewards_per_episode[e] / (run + 1)
+            writer.writerow([e + 1, avg_reward])
+            file.flush()  # Ensure data is written to the file immediately
+            print(f"Run: {run+1}, Episode: {e+1}/{episodes}, Reward: {total_reward:.2f}, Average Reward: {avg_reward:.2f}")
+    env.close()
+
+def main():
+    num_runs = 5
+    episodes = 300
     batch_size = 32
     max_steps_per_episode = 1000
+    csv_file = 'rewards.csv'
 
-    rewards_per_episode = []  # Track total reward per episode
-    avg_speed_per_episode = []  # Average speed per episode
-    queue_length_per_episode = []  # Queue length per episode
+    manager = Manager()
+    rewards_per_episode = manager.list([0] * episodes)
+    lock = manager.Lock()
 
-    for e in range(episodes):
-        state = env.reset()
-        total_reward = 0
-        done = False
-        step_count = 0 
+    with open(csv_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Episode', 'Average Reward'])
 
-        while not done and step_count < max_steps_per_episode:
-            action = agent.act(state)
-            next_state, reward, done = env.step(action)
-            agent.remember(state, action, reward, next_state, done)
-            state = next_state
-            total_reward += reward
-            step_count += 1
+    with Pool(processes=num_runs) as pool:
+        pool.starmap(run_simulation, [(run, episodes, max_steps_per_episode, batch_size, rewards_per_episode, lock, csv_file) for run in range(num_runs)])
 
-        rewards_per_episode.append(total_reward)
-        avg_speed_per_episode.append(traci.edge.getLastStepMeanSpeed("highway_entry"))
-        queue_length_per_episode.append(traci.edge.getLastStepHaltingNumber("ramp_entry"))
-        
-        agent.replay(batch_size)
-        if e % agent.target_update_freq == 0:
-            agent.update_target_model()
-        agent.update_exploration()
+    # Calculate the average rewards across all runs
+    avg_rewards = [reward / num_runs for reward in rewards_per_episode]
 
-        print(f"Episode: {e+1}, Reward: {total_reward:.2f}, Avg Speed: {np.mean(avg_speed_per_episode):.2f}, "
-        f"Queue: {np.mean(queue_length_per_episode):.2f}, Epsilon: {agent.epsilon:.2f}") 
-    
-     # Plot metrics
-    # Plot Total Reward Across Episodes
-    plt.figure(figsize=(12, 6))
-    plt.plot(rewards_per_episode, label='Total Reward', color='b')
-    plt.title('Total Reward Across Episodes')
-    plt.xlabel('Episodes')
-    plt.ylabel('Total Reward')
-    plt.legend()
+    # Plot the average rewards
+    plt.plot(avg_rewards)
+    plt.xlabel('Episode')
+    plt.ylabel('Average Reward')
+    plt.title('Average Reward Across Episodes')
     plt.show()
 
-    # Plot Average Speed Across Episodes
-    plt.figure(figsize=(12, 6))
-    plt.plot(avg_speed_per_episode, label='Average Speed', color='g')
-    plt.title('Average Vehicle Speed Across Episodes')
-    plt.xlabel('Episodes')
-    plt.ylabel('Average Speed (m/s)')
-    plt.legend()
-    plt.show()
-
-    # Plot Queue Length Across Episodes
-    plt.figure(figsize=(12, 6))
-    plt.plot(queue_length_per_episode, label='Queue Length', color='r')
-    plt.title('Average Queue Length Across Episodes')
-    plt.xlabel('Episodes')
-    plt.ylabel('Number of Halted Vehicles')
-    plt.legend()
-    plt.show()
-    
-    agent.model.save("dqn_model.h5")
-    env.close()
+if __name__ == "__main__":
+    main()
