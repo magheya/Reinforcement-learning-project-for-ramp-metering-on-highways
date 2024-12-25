@@ -116,6 +116,7 @@ class DQNAgent:
         self.update_target_model()
         self.target_update_freq = 10  # Mise à jour du réseau cible tous les 10 épisodes
         self.episode_count = 0
+        self.exploration_strategy = "adaptive_reset"
     
     def build_model(self):
         model = tf.keras.Sequential([
