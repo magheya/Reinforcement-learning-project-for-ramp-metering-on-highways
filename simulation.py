@@ -104,7 +104,7 @@ class DQNAgent:
         self.action_size = action_size
         # self.memory = deque(maxlen=10000)
         storage = ListStorage(max_size=10000)
-        self.memory = PrioritizedReplayBuffer(storage=storage, alpha=0.6)
+        self.memory = PrioritizedReplayBuffer(storage=storage, alpha=0.6, beta=0.4)
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_decay = 0.995
@@ -131,13 +131,14 @@ class DQNAgent:
         self.target_model.set_weights(self.model.get_weights())
 
     def remember(self, state, action, reward, next_state, done):
-        # Calculate a more meaningful TD error if possible
+        # Calculate TD error (or use a default priority initially)
         q_values_next = self.target_model.predict(next_state[np.newaxis, :], verbose=0)
         max_q_value_next = np.amax(q_values_next)
         td_error = abs(reward + (self.gamma * max_q_value_next) - np.amax(self.model.predict(state[np.newaxis, :], verbose=0)))
-        
-        # Add to the buffer with calculated TD error as priority
-        self.memory.add((state, action, reward, next_state, done), priority=td_error)
+
+        # Add the sample to the buffer
+        index = self.memory.add((state, action, reward, next_state, done))  # Add experience and get its index
+        self.memory.update_priority([index], [td_error])  # Update priority for the added experience
     
     # def act(self, state):
     #     # Epsilon-Greedy Strategy
