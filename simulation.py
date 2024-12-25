@@ -5,7 +5,9 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import matplotlib.pyplot as plt
-
+import torch
+# from torchrl.data import ListStorage, PrioritizedReplayBuffer
+# from rl_replay_buffer import PrioritizedReplayBuffer
 
 # Define SUMO environment
 class SumoRampEnv:
@@ -74,9 +76,9 @@ class SumoRampEnv:
 
 
         # Pondération ajustée
-        alpha = 0.4
-        beta = -0.6
-        gamma = 0.8
+        alpha = 0.6
+        beta = -2
+        gamma = 0.5
         
         # Calculate the reward components
         reward = (alpha * highway_throughput) + (beta * ramp_queue) + (gamma * avg_speed)
@@ -102,36 +104,38 @@ class DQNAgent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
-        self.memory = deque(maxlen=2000)
+        # self.memory = deque(maxlen=10000)
+        self.memory = PrioritizedReplayBuffer(capacity=10000, alpha=0.6)
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_decay = 0.995
         self.epsilon_min = 0.01
-        self.learning_rate = 1e-03
+        self.learning_rate = 5e-4
         self.model = self.build_model()
         self.target_model = self.build_model()
         self.update_target_model()
         self.target_update_freq = 10  # Mise à jour du réseau cible tous les 10 épisodes
-        self.exploration_strategy = "linear_decay"  # Can also set to "periodic_reset"
-        self.reset_period = 50  # For periodic exploration reset
         self.episode_count = 0
     
     def build_model(self):
         model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=(self.state_size,)),
-            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(128, activation='relu'),
             tf.keras.layers.Dense(64, activation='relu'),
             tf.keras.layers.Dense(32, activation='relu'),
             tf.keras.layers.Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0))
+        model.compile(loss='mse', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=0.5))
         return model
     
     def update_target_model(self):
         self.target_model.set_weights(self.model.get_weights())
 
     def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+        # self.memory.append((state, action, reward, next_state, done))
+        # Calculate TD error or priority (you may set a default priority for now, e.g., `abs(reward)`)
+        td_error = abs(reward)  # Simplified; you can later use more advanced TD error calculation
+        self.memory.add(state, action, reward, next_state, done, priority=td_error)
     
     def act(self, state):
         # Epsilon-Greedy Strategy
@@ -144,25 +148,49 @@ class DQNAgent:
         if len(self.memory) < batch_size:
             return
         
-        minibatch = random.sample(self.memory, batch_size)
-        for state, action, reward, next_state, done in minibatch:
+        # minibatch = random.sample(self.memory, batch_size)
+        # for state, action, reward, next_state, done in minibatch:
+        #     target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :], verbose=0))
+        #     target_f = self.model.predict(state[np.newaxis, :], verbose=0)
+        #     target_f[0][action] = target
+        #     self.model.fit(state[np.newaxis, :], target_f, epochs=1, verbose=0)
+
+        # Sample minibatch with importance sampling weights
+        minibatch, indices, weights = self.memory.sample(batch_size)
+        
+        for i, (state, action, reward, next_state, done) in enumerate(minibatch):
             target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :], verbose=0))
             target_f = self.model.predict(state[np.newaxis, :], verbose=0)
             target_f[0][action] = target
-            self.model.fit(state[np.newaxis, :], target_f, epochs=1, verbose=0)
+            
+            # Update model and adjust priority
+            self.model.fit(state[np.newaxis, :], target_f, sample_weight=np.array([weights[i]]), epochs=1, verbose=0)
+            
+            # Calculate updated priority and update buffer
+            new_priority = abs(target - np.amax(target_f))
+            self.memory.update(indices[i], new_priority)
 
-    def update_exploration(self):
+
+    def update_exploration(self, avg_reward=None):
         self.episode_count += 1
-        if self.exploration_strategy == "linear_decay":
+
+        if self.exploration_strategy == "exponential_decay":
+            # Exponential decay of epsilon
             self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
-        elif self.exploration_strategy == "periodic_reset" and self.episode_count % self.reset_period == 0:
-            self.epsilon = 0.5  # Redémarrage partiel de l'exploration
+
+        elif self.exploration_strategy == "adaptive_reset":
+            # Periodic reset of epsilon based on reward performance
+            if self.episode_count % self.reset_period == 0 and avg_reward is not None:
+                if avg_reward < 0:  # Poor performance, increase exploration
+                    self.epsilon = 0.7
+                else:  # Good performance, reduce exploration
+                    self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
 
 # Training Loop
 if __name__ == "__main__":
     env = SumoRampEnv()
     agent = DQNAgent(env.state_size, env.action_size)
-    episodes = 1000
+    episodes = 100
     batch_size = 32
     max_steps_per_episode = 1000
 
