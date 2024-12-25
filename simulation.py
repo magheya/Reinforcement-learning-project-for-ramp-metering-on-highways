@@ -13,7 +13,7 @@ class SumoRampEnv:
     def __init__(self):
         self.sumoCmd = [
             "sumo",
-            "-c", "E:/ESTIN/RLOC_Project/RL_project.sumocfg"
+            "-c", "RL_project.sumocfg"
         ]
         self.actions = [0, 1, 2]  # Green, Yellow, Red
         self.state_size = 6  # State dimensions
