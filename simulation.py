@@ -5,9 +5,7 @@ import numpy as np
 import tensorflow as tf
 from collections import deque
 import matplotlib.pyplot as plt
-import torch
-# from torchrl.data import ListStorage, PrioritizedReplayBuffer
-# from rl_replay_buffer import PrioritizedReplayBuffer
+from torchrl.data import ListStorage, PrioritizedReplayBuffer
 
 # Define SUMO environment
 class SumoRampEnv:
@@ -70,8 +68,8 @@ class SumoRampEnv:
         ramp_queue = traci.edge.getLastStepHaltingNumber("ramp_entry")
         avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
 
-        highway_throughput = min(highway_throughput / 100, 1)  # Cap à 100 véhicules
-        ramp_queue = min(ramp_queue / 50, 1)  # Cap à 50 véhicules
+        highway_throughput = min(highway_throughput / 10, 1)  # Cap à 100 véhicules
+        ramp_queue = min(ramp_queue / 5, 1)  # Cap à 50 véhicules
         avg_speed = avg_speed / 15  # Normalisé à une vitesse maximale de 15 m/s
 
 
@@ -105,7 +103,8 @@ class DQNAgent:
         self.state_size = state_size
         self.action_size = action_size
         # self.memory = deque(maxlen=10000)
-        self.memory = PrioritizedReplayBuffer(capacity=10000, alpha=0.6)
+        storage = ListStorage(max_size=10000)
+        self.memory = PrioritizedReplayBuffer(storage=storage, alpha=0.6)
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_decay = 0.995
@@ -132,44 +131,53 @@ class DQNAgent:
         self.target_model.set_weights(self.model.get_weights())
 
     def remember(self, state, action, reward, next_state, done):
-        # self.memory.append((state, action, reward, next_state, done))
-        # Calculate TD error or priority (you may set a default priority for now, e.g., `abs(reward)`)
-        td_error = abs(reward)  # Simplified; you can later use more advanced TD error calculation
-        self.memory.add(state, action, reward, next_state, done, priority=td_error)
+        # Calculate a more meaningful TD error if possible
+        q_values_next = self.target_model.predict(next_state[np.newaxis, :], verbose=0)
+        max_q_value_next = np.amax(q_values_next)
+        td_error = abs(reward + (self.gamma * max_q_value_next) - np.amax(self.model.predict(state[np.newaxis, :], verbose=0)))
+        
+        # Add to the buffer with calculated TD error as priority
+        self.memory.add((state, action, reward, next_state, done), priority=td_error)
     
-    def act(self, state):
-        # Epsilon-Greedy Strategy
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)  # Random action (exploration)
+    # def act(self, state):
+    #     # Epsilon-Greedy Strategy
+    #     if np.random.rand() <= self.epsilon:
+    #         return random.randrange(self.action_size)  # Random action (exploration)
+    #     q_values = self.model.predict(state[np.newaxis, :], verbose=0)
+    #     return np.argmax(q_values)  # Best action (exploitation)
+    
+    def act(self, state, temperature=1.0):
         q_values = self.model.predict(state[np.newaxis, :], verbose=0)
-        return np.argmax(q_values)  # Best action (exploitation)
+        scaled_q_values = q_values / temperature  # Scale Q-values by temperature
+        probabilities = np.exp(scaled_q_values) / np.sum(np.exp(scaled_q_values))  # Softmax probabilities
+        return np.random.choice(range(self.action_size), p=probabilities[0])
+    
+        # Low Temperature (𝜏→0): Becomes more greedy, focusing on the highest Q-value.
+        # High Temperature (τ→∞): Becomes more exploratory, approaching a uniform distribution.
     
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
             return
         
-        # minibatch = random.sample(self.memory, batch_size)
-        # for state, action, reward, next_state, done in minibatch:
-        #     target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :], verbose=0))
-        #     target_f = self.model.predict(state[np.newaxis, :], verbose=0)
-        #     target_f[0][action] = target
-        #     self.model.fit(state[np.newaxis, :], target_f, epochs=1, verbose=0)
-
         # Sample minibatch with importance sampling weights
         minibatch, indices, weights = self.memory.sample(batch_size)
         
         for i, (state, action, reward, next_state, done) in enumerate(minibatch):
+            # Calculate target Q-value
             target = reward if done else reward + self.gamma * np.amax(self.target_model.predict(next_state[np.newaxis, :], verbose=0))
+            
+            # Predict current Q-values for the state and update the target for the action taken
             target_f = self.model.predict(state[np.newaxis, :], verbose=0)
             target_f[0][action] = target
             
-            # Update model and adjust priority
+            # Fit the model using the sample weight
             self.model.fit(state[np.newaxis, :], target_f, sample_weight=np.array([weights[i]]), epochs=1, verbose=0)
             
-            # Calculate updated priority and update buffer
-            new_priority = abs(target - np.amax(target_f))
-            self.memory.update(indices[i], new_priority)
-
+            # Calculate updated priority using absolute TD error
+            updated_priority = abs(target - np.amax(target_f))
+            
+            # Update the priority of the sampled experience in the buffer
+            self.memory.update(indices[i], updated_priority)
 
     def update_exploration(self, avg_reward=None):
         self.episode_count += 1
