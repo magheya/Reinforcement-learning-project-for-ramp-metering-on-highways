@@ -13,7 +13,7 @@ from multiprocessing import Pool, Manager
 class SumoRampEnv:
     def __init__(self):
         self.sumoCmd = [
-            "sumo",
+            "sumo-gui",
             "-c", "E:/ESTIN/RLOC_Project/RL_project.sumocfg"
         ]
         self.actions = [0, 1, 2]  # Green, Yellow, Red
@@ -65,35 +65,24 @@ class SumoRampEnv:
             return np.zeros(self.state_size)
 
     def calculate_reward(self):
-        # Get relevant traffic data from SUMO simulation
-        highway_throughput = traci.edge.getLastStepVehicleNumber("highway_entry")
+        throughput = traci.edge.getLastStepVehicleNumber("highway_entry")
         ramp_queue = traci.edge.getLastStepHaltingNumber("ramp_entry")
         avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
 
-        highway_throughput = min(highway_throughput / 100, 1)  # Cap à 100 véhicules
-        ramp_queue = min(ramp_queue / 50, 1)  # Cap à 50 véhicules
-        avg_speed = avg_speed / 15  # Normalisé à une vitesse maximale de 15 m/s
+        alpha = 0.7
+        beta = -4
+        gamma = 1.5
 
+        reward = (alpha * throughput) + (beta * ramp_queue) + (gamma * avg_speed)
 
-        # Pondération ajustée
-        alpha = 0.5
-        beta = -1
-        gamma = 1
-        
-        # Calculate the reward components
-        reward = (alpha * highway_throughput) + (beta * ramp_queue) + (gamma * avg_speed)
-
-        if traci.trafficlight.getPhaseDuration("ramp_metering_tl") > 5:
-            reward += 0.05  # Phase stable
-        
-        if traci.simulation.getCollidingVehiclesNumber() > 0:
-            reward -= 10.0  # Collision détectée
-        
         if avg_speed < 2.0:
-            reward -= 5.0  # Embouteillage
+            reward -= 2.0  # Penalty for severe congestion
+
+        collisions = traci.simulation.getCollidingVehiclesNumber()
+        if collisions > 0:
+            reward -= 5.0  # Moderate collision penalty
 
         return reward
-
 
     def close(self):
         traci.close()
@@ -108,7 +97,7 @@ class DQNAgent:
         self.epsilon = 1.0
         self.epsilon_decay = 0.995
         self.epsilon_min = 0.01
-        self.learning_rate = 1e-03
+        self.learning_rate = 0.0005
         self.model = self.build_model()
         self.target_model = self.build_model()
         self.update_target_model()
