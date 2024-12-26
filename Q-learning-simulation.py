@@ -1,130 +1,118 @@
-import numpy as np
+import os
 import traci
+import numpy as np
+import random
 import matplotlib.pyplot as plt
 
-class QLearningAgent:
-    def __init__(self, state_size, action_size, alpha=0.1, gamma=0.9, epsilon=1.0, epsilon_min=0.1, epsilon_decay=0.995):
-        self.state_size = state_size
-        self.action_size = action_size  # Now includes Yellow
-        self.q_table = np.zeros((state_size, action_size))  # Initialize Q-table
-        self.alpha = alpha  # Learning rate
-        self.gamma = gamma  # Discount factor
-        self.epsilon = epsilon  # Exploration rate
-        self.epsilon_min = epsilon_min
-        self.epsilon_decay = epsilon_decay
+# Environment Parameters
+SUMO_CMD = ["sumo", "-c", "RL_project.sumocfg"]  # Path to your SUMO config file
+STATE_SPACE = 5  # Traffic density states
+ACTION_SPACE = 3  # Green (0), Yellow (1), Red (2)
+EPISODES = 1000
+GAMMA = 0.99  # Discount factor
+ALPHA = 0.0005  # Learning rate
+EPSILON = 0.1  # Exploration-exploitation tradeoff
 
-    def choose_action(self, state):
-        """Choose an action based on the epsilon-greedy policy."""
-        if np.random.rand() <= self.epsilon:
-            return np.random.choice(self.action_size)  # Explore: random action
-        return np.argmax(self.q_table[state])  # Exploit: best action
+# Initialize Q-Table
+q_table = np.zeros((STATE_SPACE, ACTION_SPACE))
 
-    def learn(self, state, action, reward, next_state):
-        """Update Q-table using the Q-learning update rule."""
-        best_next_action = np.argmax(self.q_table[next_state])
-        td_target = reward + self.gamma * self.q_table[next_state][best_next_action]
-        td_error = td_target - self.q_table[state][action]
-        self.q_table[state][action] += self.alpha * td_error
-
-        # Decay epsilon to favor exploitation over time
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-
-def get_state():
-    """Map traffic conditions to a discrete state."""
-    ramp_queue = len(traci.edge.getLastStepVehicleIDs("ramp_entry"))
-    highway_speed = traci.edge.getLastStepMeanSpeed("highway_entry")
-
-    # Example: Define states based on queue length and highway speed
-    if ramp_queue > 10:
-        if highway_speed < 20:
-            return 0  # High queue, low speed
-        else:
-            return 1  # High queue, high speed
-    else:
-        if highway_speed < 20:
-            return 2  # Low queue, low speed
-        else:
-            return 3  # Low queue, high speed
-
-
-def main():
-    sumoBinary = "sumo-gui"  # Use "sumo" for non-GUI mode
-    sumoCmd = [sumoBinary, "-c", "RL_project.sumocfg"]
-
-    # Initialize the Q-learning agent
-    state_size = 4  # Four discrete states as defined in `get_state`
-    action_size = 3  # Actions: 0 = Green, 1 = Yellow, 2 = Red
-    agent = QLearningAgent(state_size, action_size)
-
-    episodes = 100  # Number of episodes for training
-    reward_history = []  # Store rewards for each episode
-
-    # Start SUMO GUI once
-    traci.start(sumoCmd)
-
-    for episode in range(episodes):
-
-        print(f"Starting Episode {episode + 1}")
-        traci.load(["-c", "RL_project.sumocfg"])  # Reset the simulation
+# Reward Function with Multiple Metrics
+def calculate_reward():
+    waiting_time = sum(traci.edge.getWaitingTime(edge) for edge in ["ramp_entry"])
+    flow = traci.edge.getLastStepVehicleNumber("highway_entry")
+    avg_speed = traci.edge.getLastStepMeanSpeed("highway_entry")  # Average speed on the highway
+    ramp_queue = traci.edge.getLastStepVehicleNumber("ramp_entry")  # Queue length on the ramp
     
-        total_reward = 0
+    # Reward combines multiple factors
+    reward = (-waiting_time * 0.5) + (flow * 1.0) + (avg_speed * 0.3) - (ramp_queue * 0.2)
+    return reward
 
-        state = get_state()  # Initialize the starting state
-        prev_action = -1  # To track the previous action
+# State Representation
+def get_state():
+    density = traci.edge.getLastStepOccupancy("highway_entry")
+    if density < 0.2:
+        return 0
+    elif density < 0.4:
+        return 1
+    elif density < 0.6:
+        return 2
+    elif density < 0.8:
+        return 3
+    else:
+        return 4
 
-        for step in range(3600):  # Simulate for 3600 seconds
-            action = agent.choose_action(state)
+# Action Execution with Yellow Light
+def take_action(action):
+    if action == 0:
+        traci.trafficlight.setPhase("ramp_metering_tl", 0)  # Green Light
+    elif action == 1:
+        traci.trafficlight.setPhase("ramp_metering_tl", 1)  # Yellow Light
+    elif action == 2:
+        traci.trafficlight.setPhase("ramp_metering_tl", 2)  # Red Light
 
-            # Apply traffic light logic
-            if action == 0:  # Green light
-                if prev_action == 2:  # If transitioning from red
-                    traci.trafficlight.setPhase("ramp_metering_tl", 1)  # Yellow phase
-                    traci.simulationStep()
-                traci.trafficlight.setPhase("ramp_metering_tl", 0)
-            elif action == 1:  # Yellow light
-                traci.trafficlight.setPhase("ramp_metering_tl", 1)
-            elif action == 2:  # Red light
-                if prev_action == 0:  # If transitioning from green
-                    traci.trafficlight.setPhase("ramp_metering_tl", 1)  # Yellow phase
-                    traci.simulationStep()
-                traci.trafficlight.setPhase("ramp_metering_tl", 2)
+# Training Loop
+reward_history = []
+avg_speed_history = []
+waiting_time_history = []
 
-            # Advance simulation
-            traci.simulationStep()
+for episode in range(EPISODES):
+    traci.start(SUMO_CMD)
+    total_reward = 0
+    total_waiting_time = 0
+    total_avg_speed = 0
 
-            # Get next state and reward
-            next_state = get_state()
-            reward = (
-                -len(traci.edge.getLastStepVehicleIDs("ramp_entry"))  # Penalize long queues
-                + traci.edge.getLastStepMeanSpeed("highway_entry")  # Reward high speed
-            )
-            total_reward += reward
+    for step in range(1000):  # Simulation steps per episode
+        state = get_state()
+        if random.uniform(0, 1) < EPSILON:
+            action = random.choice(range(ACTION_SPACE))  # Exploration
+        else:
+            action = np.argmax(q_table[state])  # Exploitation
 
-            # Update the Q-table
-            agent.learn(state, action, reward, next_state)
+        take_action(action)
+        traci.simulationStep()
 
-            # Transition to the next state
-            state = next_state
-            prev_action = action
+        reward = calculate_reward()
+        next_state = get_state()
+        total_reward += reward
+        
+        # Collect metrics
+        total_waiting_time += sum(traci.edge.getWaitingTime(edge) for edge in ["ramp_entry"])
+        total_avg_speed += traci.edge.getLastStepMeanSpeed("highway_entry")
 
-        print(f"Episode {episode + 1}: Total Reward = {total_reward}")
-        reward_history.append(total_reward)  # Track rewards
+        # Q-Learning Update
+        best_next_action = np.argmax(q_table[next_state])
+        q_table[state, action] += ALPHA * (reward + GAMMA * q_table[next_state, best_next_action] - q_table[state, action])
 
+    reward_history.append(total_reward)
+    avg_speed_history.append(total_avg_speed / 1000)  # Average per step
+    waiting_time_history.append(total_waiting_time / 1000)  # Average per step
+    
     traci.close()
+    print(f"Episode {episode + 1}/{EPISODES}, Total Reward: {total_reward}, Avg Speed: {avg_speed_history[-1]:.2f}, Avg Waiting Time: {waiting_time_history[-1]:.2f}")
 
-    # Save the Q-table for future use
-    np.save("q_table.npy", agent.q_table)
-    print("Training complete. Q-table saved.")
+# Plot Results
+fig, axs = plt.subplots(3, 1, figsize=(10, 15))
 
-    # Plot reward history
-    plt.plot(reward_history)
-    plt.title("Total Reward Per Episode")
-    plt.xlabel("Episode")
-    plt.ylabel("Total Reward")
-    plt.grid()
-    plt.show()
+# Plot Total Rewards
+axs[0].plot(reward_history)
+axs[0].set_title('Total Reward per Episode')
+axs[0].set_xlabel('Episode')
+axs[0].set_ylabel('Total Reward')
 
-if __name__ == "__main__":
-    main()
+# Plot Average Speed
+axs[1].plot(avg_speed_history, color='green')
+axs[1].set_title('Average Speed per Episode')
+axs[1].set_xlabel('Episode')
+axs[1].set_ylabel('Average Speed (m/s)')
+
+# Plot Average Waiting Time
+axs[2].plot(waiting_time_history, color='red')
+axs[2].set_title('Average Waiting Time per Episode')
+axs[2].set_xlabel('Episode')
+axs[2].set_ylabel('Average Waiting Time (s)')
+
+plt.tight_layout()
+plt.show()
+
+# Save Q-Table
+np.save("q_table.npy", q_table)
